@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en-GB" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hearth &amp; Kettle – Seasonal Quality Dashboard (prototype)</title>
+<!-- Pico CSS v2 from its official CDN -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+<style>
+/* Brand accent: deep teal (white text on it = about 5:1 contrast) */
+:root{--pico-primary:#0b6b6a;--pico-primary-background:#0b6b6a;--pico-primary-hover:#084e4d;--pico-primary-hover-background:#084e4d;--pico-primary-underline:rgba(11,107,106,.5);--pico-primary-focus:rgba(11,107,106,.35);--pico-primary-inverse:#fff}
+/* Small layout tweaks only */
+.brand{display:flex;align-items:center;gap:.6rem;margin:0}
+.brand svg{flex:none}
+.steps{flex-wrap:wrap}
+.steps li{font-size:.85rem;padding:.25rem .6rem}
+.steps [aria-current="step"]{background:var(--pico-primary-background);color:#fff;border-radius:2rem;font-weight:700}
+.scroll{overflow-x:auto}
+.scroll table{font-size:.85rem}
+.err{border-left:.4rem solid #a4161a}
+.num{text-align:right;white-space:nowrap}
+.actions{display:flex;gap:1rem;justify-content:space-between;flex-wrap:wrap}
+.swatch{display:inline-block;width:.8rem;height:.8rem;border-radius:.2rem;background:var(--pico-primary-background);margin-right:.4rem}
+footer.site{display:flex;gap:1.5rem;flex-wrap:wrap;justify-content:space-between;font-size:.9rem}
+</style>
+</head>
+<body>
+<!-- ===== SITE HEADER: brand, out-of-scope links, progress stepper ===== -->
+<header class="container">
+  <nav aria-label="Main">
+    <ul><li><p class="brand"><svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#0b6b6a"/><path d="M8 12h13v7a5 5 0 0 1-5 5h-3a5 5 0 0 1-5-5zM21 14h2a2.5 2.5 0 0 1 0 5h-2" fill="none" stroke="#fff" stroke-width="2"/></svg><strong>Hearth &amp; Kettle</strong></p></li></ul>
+    <ul><li><a href="#" data-act="na">Orders</a></li><li><a href="#" data-act="na">Staff rota</a></li><li><a href="#" data-act="na">Settings</a></li></ul>
+  </nav>
+  <nav aria-label="Progress"><ul class="steps" id="steps"></ul></nav>
+  <progress id="prog" value="0" max="100" aria-label="Overall progress"></progress>
+</header>
+
+<main class="container" id="app" tabindex="-1"></main>
+
+<!-- ===== SITE FOOTER ===== -->
+<footer class="container site">
+  <span>Prototype for a UX project – all figures are invented.</span>
+  <span><a href="#" data-act="na">Help</a> · <a href="#" data-act="na">Privacy</a> · <a href="#" data-act="reset">Reset prototype</a></span>
+</footer>
+
+<!-- Out-of-scope message -->
+<dialog id="dlg"><article><header><h2>Coming later</h2></header><p>This part isn't in the prototype yet.</p><footer><button data-act="close">Close</button></footer></article></dialog>
+
+<script>
+/* ---------- Fake data (in memory only) ---------- */
+const SEASONS=['Spring','Summer','Autumn','Winter'];
+const MONTHS=['March–May','June–August','September–November','December–February'];
+const DAYS=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+const PAT=[.9,.95,1,1.05,1.3,1.5,1.2];
+const F={Coffee:[1,.75,1.15,1.3],Tea:[.95,.7,1.2,1.4],Cake:[1,.85,1.1,1.2],Sandwich:[1,1.25,.95,.8]};
+const Q={Coffee:[4,3,4,5],Tea:[4,3,4,5],Cake:[4,3,4,4],Sandwich:[4,5,4,3]};
+const CATS=['Coffee','Tea','Cake','Sandwich'];
+const ITEMS=[['Flat white','Coffee',3.4,.85,38],['Latte','Coffee',3.5,.9,32],['Cappuccino','Coffee',3.3,.85,28],['Americano','Coffee',2.8,.45,20],['Mocha','Coffee',3.8,1.05,14],['Espresso','Coffee',2.4,.35,12],
+['English breakfast tea','Tea',2.6,.3,16],['Earl Grey','Tea',2.7,.32,10],['Peppermint tea','Tea',2.7,.35,8],['Chai latte','Tea',3.6,.8,11],
+['Victoria sponge slice','Cake',3.9,1.2,12],['Carrot cake slice','Cake',4.1,1.3,11],['Lemon drizzle slice','Cake',3.8,1.1,10],['Chocolate brownie','Cake',3.5,1,13],['Scone, jam and cream','Cake',3.6,.95,15],
+['Cheddar and pickle sandwich','Sandwich',5.2,1.85,10],['Coronation chicken sandwich','Sandwich',5.8,2.2,9],['Ham and mustard sandwich','Sandwich',5.5,2,9],['Tuna melt','Sandwich',5.9,2.3,7],['Hummus and roasted veg wrap','Sandwich',5.4,1.9,8]];
+const LABELS=['Choose…','1 – Poor','2 – Fair','3 – Good','4 – Very good','5 – Excellent'];
+const gbp=n=>n.toLocaleString('en-GB',{style:'currency',currency:'GBP'});
+const e=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const units=(i,s,d)=>Math.round(ITEMS[i][4]*F[ITEMS[i][1]][s]*PAT[d]*(0.92+((i*7+d*3+s*5)%9)/50));
+
+/* ---------- State ---------- */
+const blank=()=>({own:{},staff:{n:'',c:{Coffee:3,Tea:3,Cake:3,Sandwich:3},notes:''},cust:{perm:'',n:'',c:{Coffee:3,Tea:3,Cake:3,Sandwich:3},notes:''},concl:'',oh:'1150',done:false});
+let S;
+function init(){S={step:1,si:0,max:0,err:[],d:SEASONS.map(blank)}}
+init();
+
+/* ---------- Calculations ---------- */
+const avg=a=>a.reduce((x,y)=>x+y,0)/a.length;
+function quality(d){
+  const own=Object.keys(d.own).length?avg(Object.values(d.own).map(Number)):0;
+  const staff=avg(Object.values(d.staff.c).map(Number));
+  const cust=d.cust.perm==='yes'?avg(Object.values(d.cust.c).map(Number)):null;
+  const parts=[[own,.4],[staff,.3]];if(cust!==null)parts.push([cust,.3]);
+  const w=parts.reduce((x,p)=>x+p[1],0);
+  return{own,staff,cust,all:parts.reduce((x,p)=>x+p[0]*p[1],0)/w};
+}
+function profit(s){
+  let rev=0,cost=0;const rows=ITEMS.map((it,i)=>{const u=DAYS.map((_,d)=>units(i,s,d));const t=u.reduce((a,b)=>a+b,0);rev+=t*it[2];cost+=t*it[3];return{it,u,t,stock:Math.ceil(t*1.12)-t}});
+  const oh=Math.max(0,parseFloat(S.d[s].oh)||0);
+  return{rows,rev,cost,oh,net:rev-cost-oh};
+}
+
+/* ---------- Validation ---------- */
+function validate(){
+  const d=S.d[S.si],er=[],add=(id,m)=>er.push({id,m});
+  if(S.step===1)ITEMS.forEach((it,i)=>{if(!d.own[i])add('q'+i,'Choose a quality score for '+it[0]+'.')});
+  if(S.step===2){const n=+d.staff.n;if(!Number.isInteger(n)||n<1||n>20)add('staffN','Enter how many colleagues took part, as a whole number from 1 to 20.')}
+  if(S.step===3){if(!d.cust.perm)add('permY','Choose whether customers gave permission to take part.');
+    if(d.cust.perm==='yes'){const n=+d.cust.n;if(!Number.isInteger(n)||n<1||n>50)add('custN','Enter how many customers took part, as a whole number from 1 to 50.')}}
+  if(S.step===4&&d.concl.trim().length<15)add('concl','Write your conclusion in at least 15 characters, for example which products changed most this season.');
+  if(S.step===5){const v=parseFloat(d.oh);if(isNaN(v)||v<0)add('oh','Enter weekly running costs in pounds, 0 or more (for example 1150).')}
+  S.err=er;return!er.length;
+}
+const bad=id=>S.err.some(x=>x.id===id)?' aria-invalid="true"':'';
+const errBox=()=>S.err.length?`<article class="err" role="alert"><h3>Please fix ${S.err.length} thing${S.err.length>1?'s':''}</h3><ul>${S.err.slice(0,6).map(x=>`<li><a href="#${x.id}">${e(x.m)}</a></li>`).join('')}${S.err.length>6?`<li>…and ${S.err.length-6} more below.</li>`:''}</ul></article>`:'';
+
+/* ---------- Shared pieces ---------- */
+const sliders=(g,c)=>CATS.map(k=>`<label for="${g}${k}">${k}s: <output id="o${g}${k}">${c[k]}</output> / 5<input type="range" id="${g}${k}" min="1" max="5" step="1" value="${c[k]}" data-p="${g}.c.${k}"></label>`).join('');
+const head=(t,sub)=>`<hgroup><p><span class="swatch"></span>${SEASONS[S.si]} (${MONTHS[S.si]}) – season ${S.si+1} of 4</p><h2 tabindex="-1" id="h">${t}</h2><p>${sub}</p></hgroup>${errBox()}`;
+const nav=(back,next)=>`<div class="actions"><button class="secondary outline" data-act="back">${back||'Back'}</button><button data-act="next">${next||'Next'}</button></div>`;
+
+/* ===== SCREEN 1 START: Test quality of food this season ===== */
+function s1(){const d=S.d[S.si];
+return head('1. Test the quality of your food','Taste or inspect each item yourself and give it a score. All 20 are needed.')+
+`<article><header>Your quality test <button class="outline secondary" data-act="fill" style="float:right;padding:.2rem .7rem">Fill example scores</button></header>
+<div class="scroll"><table><thead><tr><th scope="col">Menu item</th><th scope="col">Type</th><th scope="col">Quality score</th></tr></thead><tbody>${ITEMS.map((it,i)=>`<tr><th scope="row">${it[0]}</th><td>${it[1]}</td><td><label class="visually-hidden" for="q${i}" style="position:absolute;left:-9999px">Quality score for ${it[0]}</label><select id="q${i}" data-p="own.${i}"${bad('q'+i)}>${LABELS.map((l,v)=>`<option value="${v||''}"${+d.own[i]===v?' selected':''}>${l}</option>`).join('')}</select></td></tr>`).join('')}</tbody></table></div>
+<footer>${nav('Back','Next: colleague taste test')}</footer></article>`}
+
+/* ===== SCREEN 2 START: Taste test with colleagues ===== */
+function s2(){const d=S.d[S.si].staff;
+return head('2. Taste test with colleagues','Ask your team to taste this season’s food. Enter the group’s average score for each type.')+
+`<article><header>Colleague results</header><form onsubmit="return false"><label for="staffN">Number of colleagues who took part<input id="staffN" type="number" min="1" max="20" inputmode="numeric" value="${e(d.n)}" data-p="staff.n"${bad('staffN')} aria-describedby="hs"></label><small id="hs">Whole number, 1 to 20. Colleagues’ names are not recorded.</small>
+<fieldset><legend>Average score by type (1 = poor, 5 = excellent)</legend>${sliders('staff',d.c)}</fieldset>
+<label for="staffNotes">Comments (optional)<textarea id="staffNotes" rows="3" data-p="staff.notes">${e(d.notes)}</textarea></label></form><footer>${nav('Back','Next: customer taste test')}</footer></article>`}
+
+/* ===== SCREEN 3 START: Taste test with customers (permission first) ===== */
+function s3(){const d=S.d[S.si].cust;
+return head('3. Taste test with customers','Always ask permission first. Only continue the test with customers who say yes.')+
+`<article><header>Permission</header><form onsubmit="return false"><fieldset><legend>Did customers agree to take part in a taste test and share their feedback anonymously?</legend>
+<label><input type="radio" name="perm" id="permY" value="yes" data-p="cust.perm"${d.perm==='yes'?' checked':''}${bad('permY')}> Yes, they gave permission</label>
+<label><input type="radio" name="perm" id="permN" value="no" data-p="cust.perm"${d.perm==='no'?' checked':''}> No, they did not want to take part</label></fieldset>
+${d.perm==='yes'?`<label for="custN">Number of customers who took part<input id="custN" type="number" min="1" max="50" inputmode="numeric" value="${e(d.n)}" data-p="cust.n"${bad('custN')}></label>
+<fieldset><legend>Average score by type (1 = poor, 5 = excellent)</legend>${sliders('cust',d.c)}</fieldset>
+<label for="custNotes">Comments (optional, no names please)<textarea id="custNotes" rows="3" data-p="cust.notes">${e(d.notes)}</textarea></label>`:''}
+${d.perm==='no'?'<p><mark>No customer test this season.</mark> The conclusion will use your own and your colleagues’ scores only.</p>':''}</form><footer>${nav('Back','Next: reach conclusion')}</footer></article>`}
+
+/* ===== SCREEN 4 START: Reach conclusion ===== */
+function s4(){const d=S.d[S.si],q=quality(d);
+return head('4. Reach a conclusion','Here is how the three tests compare. Then write what you decided.')+
+`<article><header>Quality scores (out of 5)</header><div class="scroll"><table><thead><tr><th scope="col">Test</th><th scope="col" class="num">Score</th></tr></thead><tbody><tr><th scope="row">Your test (40%)</th><td class="num">${q.own.toFixed(1)}</td></tr><tr><th scope="row">Colleagues (30%)</th><td class="num">${q.staff.toFixed(1)}</td></tr><tr><th scope="row">Customers (30%)</th><td class="num">${q.cust===null?'Not tested':q.cust.toFixed(1)}</td></tr></tbody><tfoot><tr><th scope="row">Overall quality</th><td class="num"><strong>${q.all.toFixed(1)}</strong></td></tr></tfoot></table></div>
+<progress value="${q.all}" max="5" aria-label="Overall quality ${q.all.toFixed(1)} out of 5"></progress>
+<form onsubmit="return false"><label for="concl">Your conclusion for ${SEASONS[S.si].toLowerCase()}<textarea id="concl" rows="4" data-p="concl"${bad('concl')} aria-describedby="hc">${e(d.concl)}</textarea></label><small id="hc">At least 15 characters. Say which products were best or worst and why.</small></form>
+<footer>${nav('Back','Next: net profit')}</footer></article>`}
+
+/* ===== SCREEN 5 START: Net profit for this season ===== */
+function s5(){const d=S.d[S.si],p=profit(S.si),last=S.si===3;
+return head('5. Net profit for the season','A typical week of sales. Net profit = sales minus ingredient costs minus running costs.')+
+`<div class="grid"><article><header>Sales</header><strong>${gbp(p.rev)}</strong></article><article><header>Ingredients</header><strong>${gbp(p.cost)}</strong></article><article><header>Net profit</header><strong>${gbp(p.net)}</strong></article></div>
+<article><header>Weekly running costs</header><form onsubmit="return false"><label for="oh">Rent, wages and energy for one week (£)<input id="oh" inputmode="decimal" value="${e(d.oh)}" data-p="oh" data-live="1"${bad('oh')} aria-describedby="ho"></label><small id="ho">Enter pounds only, for example 1150.</small></form></article>
+<article><header>Units sold and stock, 7 days</header><div class="scroll"><table><caption>Units sold per day</caption><thead><tr><th scope="col">Item</th>${DAYS.map(x=>`<th scope="col" class="num">${x}</th>`).join('')}<th scope="col" class="num">Total</th><th scope="col" class="num">Left in stock</th><th scope="col" class="num">Sales £</th></tr></thead><tbody>${p.rows.map(r=>`<tr><th scope="row">${r.it[0]}</th>${r.u.map(v=>`<td class="num">${v}</td>`).join('')}<td class="num">${r.t}</td><td class="num">${r.stock}</td><td class="num">${gbp(r.t*r.it[2])}</td></tr>`).join('')}</tbody></table></div>
+<footer>${nav('Back',last?'Finish and compare seasons':'Save and start '+SEASONS[S.si+1])}</footer></article>`}
+
+/* ===== SCREEN 6 START: Repeat for the next seasons (handled by "Save and start next season" button above; the stepper and season tabs show progress) ===== */
+
+/* ===== SCREEN 7 START: Compare results ===== */
+function s7(){
+const done=S.d.map(d=>d.done),qs=S.d.map(quality),ps=SEASONS.map((_,i)=>profit(i));
+const ok=i=>done[i];
+const bq=qs.reduce((b,q,i)=>ok(i)&&(b<0||q.all>qs[b].all)?i:b,-1),bp=ps.reduce((b,p,i)=>ok(i)&&(b<0||p.net>ps[b].net)?i:b,-1);
+const maxNet=Math.max(1,...ps.map((p,i)=>ok(i)?p.net:0));
+let end='Complete at least one season to see a conclusion.';
+if(bq>=0)end=bq===bp?`${SEASONS[bq]} was best for both quality (${qs[bq].all.toFixed(1)}/5) and profit (${gbp(ps[bp].net)} a week).`:`${SEASONS[bq]} had the best quality (${qs[bq].all.toFixed(1)}/5), but ${SEASONS[bp]} made the most profit (${gbp(ps[bp].net)} a week). Consider protecting quality in ${SEASONS[bp].toLowerCase()} and boosting sales in ${SEASONS[bq].toLowerCase()}.`;
+return `<hgroup><p><span class="swatch"></span>All seasons</p><h2 tabindex="-1" id="h">7. Compare results</h2><p>Quality and weekly profit side by side. Use the edit buttons to correct a mistake.</p></hgroup>
+${done.every(Boolean)?'':'<article class="err" role="status"><p>Some seasons are not finished yet. Finish them to see a full comparison.</p></article>'}
+<article><header>Quality and profit</header><div class="scroll"><table><thead><tr><th scope="col">Season</th><th scope="col" class="num">Overall quality</th><th scope="col" class="num">Weekly sales</th><th scope="col" class="num">Net profit</th><th scope="col">Your conclusion</th><th scope="col">Edit</th></tr></thead><tbody>${SEASONS.map((s,i)=>`<tr><th scope="row">${s}</th>${ok(i)?`<td class="num">${i===bq?'<mark>':''}${qs[i].all.toFixed(1)} / 5${i===bq?'</mark>':''}</td><td class="num">${gbp(ps[i].rev)}</td><td class="num">${i===bp?'<mark>':''}${gbp(ps[i].net)}${i===bp?'</mark>':''}</td><td>${e(S.d[i].concl)}</td>`:'<td colspan="4">Not finished yet</td>'}<td><button class="outline secondary" data-act="edit:${i}" style="padding:.2rem .7rem">${ok(i)?'Edit':'Start'}</button></td></tr>`).join('')}</tbody></table></div></article>
+<article><header>Net profit by season</header>${SEASONS.map((s,i)=>ok(i)?`<label for="b${i}">${s}: ${gbp(ps[i].net)}</label><progress id="b${i}" value="${Math.max(0,ps[i].net)}" max="${maxNet}"></progress>`:'').join('')}</article>
+<article><header>End conclusion</header><p>${e(end)}</p><footer><div class="actions"><button class="secondary outline" data-act="back">Back</button><button data-act="na">Export report</button></div></footer></article>`}
+
+/* ---------- Rendering ---------- */
+const STEPS=['Quality test','Colleagues','Customers','Conclusion','Net profit','Next seasons','Compare'];
+function render(focus=true){
+  const st=S.step===7?7:S.step;
+  document.getElementById('steps').innerHTML=STEPS.map((l,i)=>{const n=i+1;const cur=n===st||(n===6&&false);return`<li${cur?' aria-current="step"':''}>${n}. ${l}</li>`}).join('')+`<li>${S.step===7?'':SEASONS[S.si]}</li>`;
+  const doneCount=S.d.filter(d=>d.done).length;
+  const pr=document.getElementById('prog');pr.value=S.step===7?100:Math.round(((S.si*5+S.step-1)/20)*100);pr.setAttribute('aria-label','Prototype progress '+pr.value+' per cent');
+  const f={1:s1,2:s2,3:s3,4:s4,5:s5,7:s7}[S.step];
+  const app=document.getElementById('app');app.innerHTML=f();
+  if(focus){const h=document.getElementById('h');if(h){h.focus({preventScroll:false})}}
+}
+
+/* ---------- Interactions ---------- */
+function setPath(p,v){const d=S.d[S.si];const k=p.split('.');let o=d;for(let i=0;i<k.length-1;i++)o=o[k[i]];o[k[k.length-1]]=v}
+document.addEventListener('input',ev=>{const t=ev.target;if(!t.dataset.p)return;
+  if(t.type==='radio')return;
+  setPath(t.dataset.p,t.value);
+  const out=document.getElementById('o'+t.id);if(out)out.textContent=t.value;
+  if(t.dataset.live){S.err=[];render(false);const el=document.getElementById('oh');el.focus();el.setSelectionRange(el.value.length,el.value.length)}});
+document.addEventListener('change',ev=>{const t=ev.target;if(!t.dataset.p)return;
+  if(t.type==='radio'){setPath(t.dataset.p,t.value);S.err=[];render(false);document.getElementById(t.id).focus()}});
+document.addEventListener('click',ev=>{
+  const b=ev.target.closest('[data-act]');if(!b)return;ev.preventDefault();
+  const a=b.dataset.act,dlg=document.getElementById('dlg');
+  if(a==='na')dlg.showModal();
+  else if(a==='close')dlg.close();
+  else if(a==='reset'){init();render()}
+  else if(a==='fill'){const d=S.d[S.si];ITEMS.forEach((it,i)=>{d.own[i]=String(Math.min(5,Math.max(1,Q[it[1]][S.si]+(i%4===0?-1:0))))});S.err=[];render(false)}
+  else if(a==='next'){if(!validate()){render(false);const h=document.getElementById('h');h&&h.scrollIntoView();return}
+    if(S.step<5)S.step++;
+    else{S.d[S.si].done=true;if(S.si<3){S.si++;S.max=Math.max(S.max,S.si);S.step=1}else S.step=7}
+    S.err=[];render()}
+  else if(a==='back'){S.err=[];
+    if(S.step===7){S.si=3;S.step=5}
+    else if(S.step>1)S.step--;
+    else if(S.si>0){S.si--;S.step=5}
+    else{dlg.showModal();return}
+    render()}
+  else if(a.startsWith('edit:')){S.si=+a.split(':')[1];S.step=1;S.err=[];render()}
+});
+render(false);
+</script>
+</body>
+</html>
